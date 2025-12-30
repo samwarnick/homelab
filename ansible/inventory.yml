@@ -1,0 +1,9 @@
+all:
+  hosts:
+    coolify-home:
+      ansible_host: 192.168.86.100
+    coolify-remote:
+      ansible_host: 192.168.86.200
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: ~/.ssh/id_rsa
