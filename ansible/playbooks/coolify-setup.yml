@@ -1,0 +1,32 @@
+---
+- name: Setup coolify-home
+  hosts: coolify-home
+  become: true
+
+  tasks:
+    - name: Allow HTTP/HTTPS through UFW
+      ufw:
+        rule: allow
+        port: "{{ item.1 }}"
+        proto: tcp
+        from_ip: "{{ item.0 }}"
+      with_nested:
+        - "{{ allowed_networks }}"
+        - ["80", "443"]
+
+    - name: Allow trusted networks in UFW before rules
+      blockinfile:
+        path: /etc/ufw/before.rules
+        insertbefore: "^# don.t delete the .COMMIT. line"
+        marker: "# {mark} ANSIBLE MANAGED - Trusted network access"
+        block: |
+          # Allow trusted network communication
+          {% for network in allowed_networks %}
+          -A ufw-before-input -s {{ network }} -j ACCEPT
+          {% endfor %}
+      notify: reload ufw
+
+  handlers:
+    - name: reload ufw
+      community.general.ufw:
+        state: reloaded

@@ -1,8 +1,8 @@
 ---
 - name: Harden Ubuntu Server
   hosts: all
-  become: yes
-  gather_facts: no
+  become: true
+  gather_facts: false
 
   tasks:
     - name: Wait for system to become reachable
@@ -65,7 +65,7 @@
         port: "{{ ssh_port }}"
         proto: tcp
         from_ip: "{{ item }}"
-      loop: "{{ allowed_networks }}"
+      loop: "{{ allowed_networks_ssh }}"
 
     - name: Enable UFW
       ufw:
@@ -95,12 +95,26 @@
       become: false
       remote_user: "{{ new_user }}"
 
-    # - name: Disable root SSH login
-    #   lineinfile:
-    #     path: /etc/ssh/sshd_config
-    #     regexp: "^#?PermitRootLogin"
-    #     line: "PermitRootLogin no"
-    #   notify: restart ssh
+    - name: Enable root SSH login
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin prohibit-password"
+      notify: restart ssh
+
+    - name: Enable SSH public key authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PubkeyAuthentication"
+        line: "PubkeyAuthentication yes"
+        state: present
+      notify: restart ssh
+
+    - name: Remove cloud-init restrictions from root authorized_keys
+      lineinfile:
+        path: /root/.ssh/authorized_keys
+        regexp: '^no-port-forwarding,no-agent-forwarding,no-X11-forwarding,command="echo.*exit 142" '
+        state: absent
 
     - name: Disable password authentication
       lineinfile:
@@ -149,8 +163,22 @@
       include_tasks: tasks/cloudflared.yml
       when: cloudflare_tunnel_token is defined
 
+    - name: Setup app data directory
+      file:
+        path: "{{ app_data_path }}"
+        state: directory
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: "0755"
+      when: app_data_path is defined
+
   handlers:
     - name: restart ssh
       systemd:
         name: ssh
         state: restarted
+    - name: reload ufw
+      community.general.ufw:
+        state: reloaded
+    - name: reload exports
+      command: exportfs -ra
