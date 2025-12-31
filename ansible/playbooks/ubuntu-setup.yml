@@ -22,6 +22,17 @@
       apt:
         upgrade: dist
 
+    - name: Install QEMU guest agent
+      apt:
+        name: qemu-guest-agent
+        state: present
+
+    - name: Enable and start QEMU guest agent
+      systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: yes
+
     - name: Create new user
       user:
         name: "{{ new_user }}"
