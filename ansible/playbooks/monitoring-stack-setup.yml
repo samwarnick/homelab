@@ -1,0 +1,255 @@
+---
+- name: Setup Prometheus and Grafana
+  hosts: monitoring-stack
+  become: true
+
+  vars:
+    prometheus_version: "2.48.0"
+    node_exporter_version: "1.7.0"
+    grafana_version: "latest"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - wget
+          - tar
+          - adduser
+          - libfontconfig1
+          - musl
+        state: present
+
+    - name: Create prometheus user
+      user:
+        name: prometheus
+        shell: /bin/false
+        system: yes
+        create_home: no
+
+    - name: Create prometheus directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: "0755"
+      loop:
+        - /etc/prometheus
+        - /var/lib/prometheus
+
+    - name: Download and extract Prometheus
+      unarchive:
+        src: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+        dest: /tmp
+        remote_src: yes
+
+    - name: Copy Prometheus binaries
+      copy:
+        src: "/tmp/prometheus-{{ prometheus_version }}.linux-amd64/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        owner: prometheus
+        group: prometheus
+        mode: "0755"
+        remote_src: yes
+      loop:
+        - prometheus
+        - promtool
+
+    - name: Copy Prometheus consoles and console_libraries
+      copy:
+        src: "/tmp/prometheus-{{ prometheus_version }}.linux-amd64/{{ item }}"
+        dest: "/etc/prometheus/{{ item }}"
+        owner: prometheus
+        group: prometheus
+        remote_src: yes
+      loop:
+        - consoles
+        - console_libraries
+
+    - name: Create Prometheus configuration
+      copy:
+        dest: /etc/prometheus/prometheus.yml
+        owner: prometheus
+        group: prometheus
+        mode: "0644"
+        content: |
+          global:
+            scrape_interval: 15s
+            evaluation_interval: 15s
+
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+
+            - job_name: 'node-exporter'
+              static_configs:
+                - targets:
+          {% for host in groups['vms'] %}
+                  - '{{ hostvars[host]["ansible_host"] }}:9100'
+          {% endfor %}
+
+            - job_name: 'cadvisor'
+              static_configs:
+                - targets:
+          {% for host in groups['vms'] %}
+                  - '{{ hostvars[host]["ansible_host"] }}:8081'
+          {% endfor %}
+
+            - job_name: 'proxmox'
+              static_configs:
+                - targets: ['localhost:9221']
+      notify: restart prometheus
+
+    - name: Create Prometheus systemd service
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/prometheus \
+            --config.file=/etc/prometheus/prometheus.yml \
+            --storage.tsdb.path=/var/lib/prometheus/ \
+            --web.console.templates=/etc/prometheus/consoles \
+            --web.console.libraries=/etc/prometheus/console_libraries
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart prometheus
+
+    - name: Enable and start Prometheus
+      systemd:
+        name: prometheus
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Install pip for PVE exporter
+      apt:
+        name: python3-pip
+        state: present
+
+    - name: Install Proxmox VE exporter
+      pip:
+        name: prometheus-pve-exporter
+        break_system_packages: yes
+
+    - name: Create PVE exporter config
+      copy:
+        dest: /etc/prometheus/pve.yml
+        mode: "0600"
+        content: |
+          default:
+            user: monitoring@pve
+            password: {{ proxmox_monitoring_password }}
+            verify_ssl: false
+            target: {{ gateway }}
+
+    - name: Create PVE exporter systemd service
+      copy:
+        dest: /etc/systemd/system/prometheus-pve-exporter.service
+        content: |
+          [Unit]
+          Description=Prometheus Proxmox VE Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          Environment="PVE_CONFIG_FILE=/etc/prometheus/pve.yml"
+          ExecStart=/usr/local/bin/pve_exporter
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart pve exporter
+
+    - name: Enable and start PVE exporter
+      systemd:
+        name: prometheus-pve-exporter
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Add Grafana GPG key
+      apt_key:
+        url: https://apt.grafana.com/gpg.key
+        state: present
+
+    - name: Add Grafana repository
+      apt_repository:
+        repo: "deb https://apt.grafana.com stable main"
+        state: present
+        filename: grafana
+
+    - name: Install Grafana
+      apt:
+        name: grafana
+        state: present
+        update_cache: yes
+
+    - name: Configure Grafana
+      copy:
+        dest: /etc/grafana/grafana.ini
+        content: |
+          [server]
+          http_addr = 0.0.0.0
+          http_port = 3000
+
+          [security]
+          admin_user = admin
+          admin_password = admin
+
+          [auth.anonymous]
+          enabled = false
+      notify: restart grafana
+
+    - name: Enable and start Grafana
+      systemd:
+        name: grafana-server
+        enabled: yes
+        state: started
+
+    - name: Allow Prometheus port through UFW
+      ufw:
+        rule: allow
+        port: "9090"
+        proto: tcp
+        from_ip: "{{ item }}"
+      loop: "{{ allowed_networks }}"
+
+    - name: Allow Grafana port through UFW
+      ufw:
+        rule: allow
+        port: "3000"
+        proto: tcp
+        from_ip: "{{ item }}"
+      loop: "{{ allowed_networks }}"
+
+  handlers:
+    - name: restart prometheus
+      systemd:
+        name: prometheus
+        state: restarted
+
+    - name: restart grafana
+      systemd:
+        name: grafana-server
+        state: restarted
+
+    - name: restart pve exporter
+      systemd:
+        name: prometheus-pve-exporter
+        state: restarted
+        daemon_reload: yes

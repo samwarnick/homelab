@@ -28,3 +28,14 @@ variable "vms" {
     disk_size = optional(number, 50)
   }))
 }
+
+variable "lxcs" {
+  description = "LXC configurations"
+  type = map(object({
+    ip        = string
+    cores     = optional(number, 1)
+    memory    = optional(number, 1024)
+    disk_size = optional(number, 20)
+  }))
+  default = {}
+}

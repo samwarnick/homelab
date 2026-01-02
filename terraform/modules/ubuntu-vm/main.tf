@@ -85,11 +85,13 @@ resource "proxmox_vm_qemu" "vm" {
     ]
   }
 
+  # Remove old keys from known_hosts
   provisioner "local-exec" {
-    command = "ssh-keygen -R ${var.vm_ip} 2>/dev/null || true"
+    command = "ssh-keygen -R ${proxmox_vm_qemu.vm.default_ipv4_address
+    }} 2>/dev/null || true"
   }
 }
 
 output "ip_address" {
-  value = var.vm_ip
+  value = proxmox_vm_qemu.vm.default_ipv4_address
 }

@@ -1,8 +1,12 @@
 ---
-- name: Harden Ubuntu Server
-  hosts: all
+- name: Setup Ubuntu VM
+  hosts: vms
   become: true
   gather_facts: false
+
+  vars:
+    node_exporter_version: "1.7.0"
+    cadvisor_version: "v0.49.1"
 
   tasks:
     - name: Wait for system to become reachable
@@ -173,6 +177,9 @@
     - name: Set up Cloudflare Tunnel
       include_tasks: tasks/cloudflared.yml
       when: cloudflare_tunnel_token is defined
+
+    - name: Install monitoring exporters
+      include_tasks: tasks/install-exporters.yml
 
     - name: Setup app data directory
       file:

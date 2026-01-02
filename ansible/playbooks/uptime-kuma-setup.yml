@@ -1,0 +1,103 @@
+---
+- name: Setup Uptime Kuma
+  hosts: uptime-kuma
+  become: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - git
+        state: present
+
+    - name: Install Node.js 20.x
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+      args:
+        creates: /usr/bin/node
+
+    - name: Verify Node.js installation
+      command: node --version
+      register: node_version
+      changed_when: false
+
+    - name: Create uptime-kuma user
+      user:
+        name: uptime-kuma
+        shell: /bin/bash
+        system: yes
+        create_home: no
+
+    - name: Remove old uptime-kuma installation if exists
+      file:
+        path: /opt/uptime-kuma
+        state: absent
+
+    - name: Clone Uptime Kuma repository
+      git:
+        repo: https://github.com/louislam/uptime-kuma.git
+        dest: /opt/uptime-kuma
+        version: master
+      become: true
+
+    - name: Set ownership of uptime-kuma directory
+      file:
+        path: /opt/uptime-kuma
+        state: directory
+        owner: uptime-kuma
+        group: uptime-kuma
+        recurse: yes
+
+    - name: Install Uptime Kuma dependencies
+      npm:
+        path: /opt/uptime-kuma
+        production: yes
+      become_user: uptime-kuma
+
+    - name: Run Uptime Kuma setup
+      command: npm run setup
+      args:
+        chdir: /opt/uptime-kuma
+      become_user: uptime-kuma
+      changed_when: false
+
+    - name: Create Uptime Kuma systemd service
+      copy:
+        dest: /etc/systemd/system/uptime-kuma.service
+        content: |
+          [Unit]
+          Description=Uptime Kuma
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=uptime-kuma
+          WorkingDirectory=/opt/uptime-kuma
+          ExecStart=/usr/bin/node server/server.js
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Uptime Kuma
+      systemd:
+        name: uptime-kuma
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Allow Uptime Kuma port through UFW
+      ufw:
+        rule: allow
+        port: "3001"
+        proto: tcp
+        from_ip: "{{ item }}"
+      loop: "{{ allowed_networks }}"

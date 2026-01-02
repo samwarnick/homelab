@@ -1,0 +1,104 @@
+---
+- name: Setup Ubuntu LXC
+  hosts: lxcs
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Wait for system to become reachable
+      wait_for_connection:
+        timeout: 120
+        delay: 5
+
+    - name: Gather facts after connection is established
+      setup:
+
+    - name: Configure static network and DNS via netplan
+      copy:
+        dest: /etc/netplan/01-lxc-static.yaml
+        owner: root
+        group: root
+        mode: "0640"
+        content: |
+          network:
+            version: 2
+            ethernets:
+              eth0:
+                addresses:
+                  - "{{ ansible_host }}/24"
+                nameservers:
+                  addresses:
+                    - "{{ gateway }}"
+                set-name: "eth0"
+                routes:
+                  - to: "default"
+                    via: "{{ gateway }}"
+      notify: apply netplan
+
+    - name: Disable IPv6 (recommended for LXCs)
+      sysctl:
+        name: "{{ item }}"
+        value: "1"
+        state: present
+        reload: yes
+      loop:
+        - net.ipv6.conf.all.disable_ipv6
+        - net.ipv6.conf.default.disable_ipv6
+      when: disable_ipv6 | default(true)
+
+    - name: Write resolv.conf for LXC
+      copy:
+        dest: /etc/resolv.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          nameserver {{ gateway }}
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    - name: Install required packages
+      apt:
+        name:
+          - ufw
+          - curl
+          - wget
+        state: present
+
+    - name: Configure UFW defaults
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: "incoming", policy: "deny" }
+        - { direction: "outgoing", policy: "allow" }
+
+    - name: Allow SSH through UFW
+      ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        from_ip: "{{ item }}"
+      loop: "{{ allowed_networks }}"
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Set proper timezone
+      timezone:
+        name: "{{ timezone }}"
+
+  handlers:
+    - name: apply netplan
+      command: netplan apply
+    - name: reload ufw
+      community.general.ufw:
+        state: reloaded
