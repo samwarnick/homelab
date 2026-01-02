@@ -102,6 +102,9 @@
           {% endfor %}
 
             - job_name: 'proxmox'
+              params:
+                target: ['{{ proxmox_host }}']
+              metrics_path: /pve
               static_configs:
                 - targets: ['localhost:9221']
       notify: restart prometheus
@@ -155,7 +158,6 @@
             user: monitoring@pve
             password: {{ proxmox_monitoring_password }}
             verify_ssl: false
-            target: {{ gateway }}
 
     - name: Create PVE exporter systemd service
       copy:
